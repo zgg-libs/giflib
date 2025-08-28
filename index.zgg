@@ -1,0 +1,79 @@
+golib := {
+	image:   import('gostd/image'),
+	gif:     import('gostd/image/gif'),
+	draw:    import('gostd/image/draw'),
+	palette: import('gostd/image/color/palette')
+}
+
+DEFAULT_FRAME_INFO := {}
+
+export class GIFBuilder {
+	__init__(defaultFrameInfo) {
+		this._defaultFrameInfo = defaultFrameInfo ?? DEFAULT_FRAME_INFO
+		this._frames = []
+	}
+	frameInfo(fi) {
+		this._defaultFrameInfo = fi
+		return this
+	}
+	add(...imgs) {
+		palette := golib.palette.Plan9.el
+		for i, img in imgs {
+			switch img {
+			case is @drawing.Canvas:
+				origImg := img.__dc.Image()
+				img = golib.image.NewPaletted(origImg.Bounds(), palette)
+				golib.draw.Draw(img, img.Bounds(), origImg, origImg.Bounds().Min, golib.draw.Src)
+			case is Str:
+				file := @@os.Open(img)!
+				origImg := golib.image.Decode(file)![0]
+				img = golib.image.NewPaletted(origImg.Bounds(), palette)
+				golib.draw.Draw(img, img.Bounds(), origImg, origImg.Bounds().Min, golib.draw.Src)
+			default:
+				assert false, 'img[$i]: unsupported image type'
+			}
+			this._frames.push({
+				img,
+				...this._defaultFrameInfo,
+			})
+		}
+		return this
+	}
+	build(loopCount) {
+		n := len(this._frames)
+		assert n > 0, 'no frames'
+		gif := golib.gif.GIF()
+		gif.LoopCount = loopCount ?? 0
+		gif.Image = @go.makeSlice(golib.image.Paletted.ptr, len(this._frames))
+		gif.Delay = @go.makeSlice(@go.int, n)
+		gif.Disposal = @go.makeSlice(@go.uint8, n)
+		for i, frame in this._frames { 
+			assert frame.img != nil, 'frame[$i]: no image'	
+			gif.Image[i] = frame.img
+			gif.Delay[i] = frame.delay ?? 1
+			gif.Disposal[i] = frame.disposal ?? 0
+		}
+		return gif.ptr
+	}
+	save(filename, loopCount) {
+		gif := this.build(loopCount)
+		out := use (@@os.Create(filename)!)
+		err := golib.gif.EncodeAll(out, gif)
+	}
+}
+
+if isMain {
+	gb := GIFBuilder()
+	points := [{x: @random(400), y: @random(400)} for _ in 100]
+	for j in 100 {
+		c := @drawing.Canvas(400, 400, 'fff')
+		for i in 100 {
+			p := points[i]
+			p.x += @random(-8, 9)
+			p.y += @random(-8, 9)
+			c.circle(p.x, p.y, int(@math.sin((j + i) / 18.0 * @math.PI)*10+5), '000;fcc')
+		}
+		gb.add(c)
+	}
+	log.info(gb.save('/tmp/out.gif'))
+}
